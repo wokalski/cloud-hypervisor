@@ -853,9 +853,58 @@ pub fn configure_vcpu(
 
 /// Returns a Vec of the valid memory addresses.
 /// These should be used to configure the GuestMemory structure for the platform.
-/// For x86_64 all addresses are valid from the start of the kernel except a
-/// carve out at the end of 32bit address space.
-pub fn arch_memory_regions() -> Vec<(GuestAddress, usize, RegionType)> {
+pub fn arch_memory_regions(cpu_vendor: CpuVendor) -> Vec<(GuestAddress, usize, RegionType)> {
+    if matches!(cpu_vendor, CpuVendor::AMD) {
+        arch_memory_regions_amd()
+    } else {
+        arch_memory_regions_default()
+    }
+}
+
+pub fn arch_memory_regions_amd() -> Vec<(GuestAddress, usize, RegionType)> {
+    vec![
+        // 0 GiB ~ 3GiB: memory before the gap
+        (
+            GuestAddress(0),
+            layout::MEM_32BIT_RESERVED_START.raw_value() as usize,
+            RegionType::Ram,
+        ),
+        // 4 GiB ~ 1012 GiB: memory after the gap
+        (
+            layout::RAM_64BIT_START,
+            layout::AMD_HYPER_TRANSPORT_HOLE_START.unchecked_offset_from(layout::RAM_64BIT_START)
+                as usize,
+            RegionType::Ram,
+        ),
+        // 1012 GiB - 1 TiB: AMD HyperTransport memory hole.
+        (
+            layout::AMD_HYPER_TRANSPORT_HOLE_START,
+            layout::AMD_HYPER_TRANSPORT_HOLE_SIZE as usize,
+            RegionType::Reserved,
+        ),
+        // 1 TiB ~ inf: memory after AMD HyperTransport memory hole.
+        (
+            layout::AMD_HYPER_TRANSPORT_HOLE_START
+                .unchecked_add(layout::AMD_HYPER_TRANSPORT_HOLE_SIZE),
+            usize::MAX,
+            RegionType::Ram,
+        ),
+        // 3 GiB ~ 3712 MiB: 32-bit device memory hole
+        (
+            layout::MEM_32BIT_RESERVED_START,
+            layout::MEM_32BIT_DEVICES_SIZE as usize,
+            RegionType::SubRegion,
+        ),
+        // 3712 MiB ~ 3968 MiB: 32-bit reserved memory hole
+        (
+            layout::MEM_32BIT_RESERVED_START.unchecked_add(layout::MEM_32BIT_DEVICES_SIZE),
+            (layout::MEM_32BIT_RESERVED_SIZE - layout::MEM_32BIT_DEVICES_SIZE) as usize,
+            RegionType::Reserved,
+        ),
+    ]
+}
+
+fn arch_memory_regions_default() -> Vec<(GuestAddress, usize, RegionType)> {
     vec![
         // 0 GiB ~ 3GiB: memory before the gap
         (
@@ -1381,8 +1430,13 @@ mod tests {
 
     #[test]
     fn regions_base_addr() {
-        let regions = arch_memory_regions();
+        let regions = arch_memory_regions(CpuVendor::Intel);
         assert_eq!(4, regions.len());
+        assert_eq!(GuestAddress(0), regions[0].0);
+        assert_eq!(GuestAddress(1 << 32), regions[1].0);
+
+        let regions = arch_memory_regions(CpuVendor::AMD);
+        assert_eq!(6, regions.len());
         assert_eq!(GuestAddress(0), regions[0].0);
         assert_eq!(GuestAddress(1 << 32), regions[1].0);
     }
@@ -1406,7 +1460,7 @@ mod tests {
         assert!(config_err.is_err());
 
         // Now assigning some memory that falls before the 32bit memory hole.
-        let arch_mem_regions = arch_memory_regions();
+        let arch_mem_regions = arch_memory_regions(CpuVendor::Intel);
         let ram_regions: Vec<(GuestAddress, usize)> = arch_mem_regions
             .iter()
             .filter(|r| r.2 == RegionType::Ram && r.1 != usize::MAX)
@@ -1429,7 +1483,7 @@ mod tests {
         .unwrap();
 
         // Now assigning some memory that falls after the 32bit memory hole.
-        let arch_mem_regions = arch_memory_regions();
+        let arch_mem_regions = arch_memory_regions(CpuVendor::Intel);
         let ram_regions: Vec<(GuestAddress, usize)> = arch_mem_regions
             .iter()
             .filter(|r| r.2 == RegionType::Ram)
