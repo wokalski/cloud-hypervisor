@@ -19,6 +19,8 @@ use arch::x86_64::{SgxEpcRegion, SgxEpcSection};
 use arch::RegionType;
 #[cfg(target_arch = "x86_64")]
 use devices::ioapic;
+#[cfg(target_arch = "x86_64")]
+use hypervisor::CpuVendor;
 #[cfg(target_arch = "aarch64")]
 use hypervisor::HypervisorVmError;
 use libc::_SC_NPROCESSORS_ONLN;
@@ -932,13 +934,13 @@ impl MemoryManager {
                 // based on the GuestMemory regions.
                 continue;
             }
-            self.ram_allocator
-                .allocate(
-                    Some(GuestAddress(region.base)),
-                    region.size as GuestUsize,
-                    None,
-                )
-                .ok_or(Error::MemoryRangeAllocation)?;
+            // This allocation may fail for reserved regions that are above the
+            // maximum hotpluggable memory threshold.
+            self.ram_allocator.allocate(
+                Some(GuestAddress(region.base)),
+                region.size as GuestUsize,
+                None,
+            );
         }
 
         Ok(())
@@ -984,6 +986,7 @@ impl MemoryManager {
         restore_data: Option<&MemoryManagerSnapshotData>,
         existing_memory_files: Option<HashMap<u32, File>>,
         #[cfg(target_arch = "x86_64")] sgx_epc_config: Option<Vec<SgxEpcConfig>>,
+        #[cfg(target_arch = "x86_64")] cpu_vendor: CpuVendor,
     ) -> Result<Arc<Mutex<MemoryManager>>, Error> {
         trace_scoped!("MemoryManager::new");
 
@@ -1039,6 +1042,9 @@ impl MemoryManager {
             )
         } else {
             // Init guest memory
+            #[cfg(target_arch = "x86_64")]
+            let arch_mem_regions = arch::arch_memory_regions(cpu_vendor);
+            #[cfg(not(target_arch = "x86_64"))]
             let arch_mem_regions = arch::arch_memory_regions();
 
             let ram_regions: Vec<(GuestAddress, usize)> = arch_mem_regions
@@ -1260,6 +1266,7 @@ impl MemoryManager {
         source_url: Option<&str>,
         prefault: bool,
         phys_bits: u8,
+        #[cfg(target_arch = "x86_64")] cpu_vendor: CpuVendor,
     ) -> Result<Arc<Mutex<MemoryManager>>, Error> {
         if let Some(source_url) = source_url {
             let mut memory_file_path = url_to_path(source_url).map_err(Error::Restore)?;
@@ -1279,6 +1286,8 @@ impl MemoryManager {
                 None,
                 #[cfg(target_arch = "x86_64")]
                 None,
+                #[cfg(target_arch = "x86_64")]
+                cpu_vendor,
             )?;
 
             mm.lock()
