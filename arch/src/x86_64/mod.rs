@@ -1307,6 +1307,11 @@ fn update_cpuid_topology(
     CpuidPatch::set_cpuid_reg(cpuid, 0x1f, Some(2), CpuidReg::ECX, 5 << 8);
 
     if matches!(cpu_vendor, CpuVendor::AMD) {
+        let mut cpu_eax = unsafe { core::arch::x86_64::__cpuid_count(0x8000_001d, 3) }.ebx;
+        cpu_eax &= !(0xfff << 14);
+        cpu_eax |= (u32::from(dies_per_package * cores_per_die * threads_per_core) - 1) << 14;
+        CpuidPatch::set_cpuid_reg(cpuid, 0x8000_001d, Some(3), CpuidReg::EAX, cpu_eax);
+
         CpuidPatch::set_cpuid_reg(
             cpuid,
             0x8000_001e,
