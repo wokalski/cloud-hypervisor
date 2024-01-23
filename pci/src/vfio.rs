@@ -1568,6 +1568,12 @@ impl VfioPciDevice {
                     self.vm
                         .create_user_memory_region(mem_region)
                         .map_err(VfioPciError::CreateUserMemoryRegion)?;
+
+                    if !self.iommu_attached {
+                        self.container
+                            .vfio_dma_map(user_memory_region.start, user_memory_region.size, user_memory_region.host_addr)
+                            .map_err(VfioPciError::DmaMap)?;
+                    }
                 }
             }
         }
